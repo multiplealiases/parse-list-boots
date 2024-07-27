@@ -32,7 +32,7 @@ function append_mktemp() {
 }
 
 function banner() {
-    echo Parse uptimes from journalctl --list-boots.
+    echo Parses uptimes from 'journalctl --list-boots' and provide stats or raw data.
 }
 
 function usage() {
@@ -146,7 +146,7 @@ do
         shift 1
         ;;
     --)
-        die "No positional arguments are accepted.\n"
+        die "This script does not take positional args\n"
         ;;
     esac
 done
