@@ -44,6 +44,7 @@ cat << EOF
 $(banner)
 $(usage)
 
+This script requires your init system to be systemd.
 Defaults shown in [].
 -r, --raw       print raw durations instead of an analysis
 -h, --help      this help
