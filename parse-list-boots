@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+set -o nounset
+set -o errexit
+set -o pipefail
+
+prog_requires=( jq journalctl bc )
+prog_absent=()
+for p in "${prog_requires[@]}"
+do
+    &>/dev/null type -p "$p" || prog_absent+=( "$p" )
+done
+
+if [[ ${#prog_absent[@]} -gt 0 ]]
+then
+    cat << EOF
+Missing programs: ${prog_absent[@]}
+EOF
+exit 1
+fi
+
+cleanup_array="$(mktemp)"
+function cleanup() {
+    < "$cleanup_array" xargs -0 -I{} rm -rf {}
+    rm -f "$cleanup_array"
+}
+# it is correct to pass this function no args.
+# shellcheck disable=SC2120
+function append_mktemp() {
+    tmp="$(mktemp "$@")"
+    printf "%s\0" "$tmp" >> "$cleanup_array"
+    printf "%s\n" "$tmp"
+}
+
+function banner() {
+    echo Parse uptimes from journalctl --list-boots.
+}
+
+function usage() {
+    echo Usage: parse-list-boots [-r]
+}
+
+function help_text() {
+cat << EOF
+$(banner)
+$(usage)
+
+Defaults shown in [].
+-r, --raw       print raw durations instead of an analysis
+-h, --help      this help
+EOF
+}
+
+function die {
+    # this is a printf wrapper.
+    # shellcheck disable=SC2059
+    printf "$@"
+    exit 1
+}
+
+# from https://unix.stackexchange.com/a/27014
+function displaytime {
+  local T=$1
+  local D=$((T/60/60/24))
+  local H=$((T/60/60%24))
+  local M=$((T/60%60))
+  local S=$((T%60))
+  (( D > 0 )) && printf '%d days ' $D
+  (( H > 0 )) && printf '%d hours ' $H
+  (( M > 0 )) && printf '%d minutes ' $M
+  (( D > 0 || H > 0 || M > 0 )) && printf 'and '
+  printf '%d seconds\n' $S
+}
+
+function sumlist() {
+    paste -sd+ | tr -d '\r' | bc
+}
+
+function average() {
+    file="$1"
+    n=$(wc -l < "$file")
+    total=$(sumlist < "$file")
+    average=$(( total / n ))
+    printf '%s\n' "$average"
+}
+
+function minimum() {
+    file="$1"
+    < "$file" sort -n | head -n1
+}
+
+function maximum() {
+    file="$1"
+    < "$file" sort -n | tail -n1
+}
+
+function evenodd {
+    n="$1"
+    printf '%s\n' "$((n % 2))"
+}
+
+function median() {
+    file="$1"
+    n=$(wc -l < "$file")
+    half=$(( n / 2 ))
+    add=$(( $(evenodd "$half") + 1))
+    tmp=$(append_mktemp)
+
+    < "$file" sort -n | head -n "$((half + add))" | tail -n "$add" > "$tmp"
+    printf '%s\n' "$(average "$tmp")"
+}
+
+function q1() {
+    file="$1"
+    n=$(wc -l < "$file")
+    half=$(( n / 4 ))
+    add=$(( $(evenodd "$half") + 1))
+    tmp=$(append_mktemp)
+
+    < "$file" sort -n | head -n "$((half + add))" | tail -n "$add" > "$tmp"
+    printf '%s\n' "$(average "$tmp")"
+}
+
+function q3() {
+    file="$1"
+    n=$(wc -l < "$file")
+    half=$(( (3 * n) / 4 ))
+    add=$(( $(evenodd "$half") + 1))
+    tmp=$(append_mktemp)
+
+    < "$file" sort -n | head -n "$((half + add))" | tail -n "$add" > "$tmp"
+    printf '%s\n' "$(average "$tmp")"
+}
+
+ARGS="$(getopt --options h,r --long help,raw -- "$@")"
+eval set -- "$ARGS"
+while [[ ! ( $# -eq 1 ) ]]
+do
+    case "$1" in
+    -h | --help)
+        help_text
+        exit 1
+        ;;
+    -r | --raw)
+        raw=1
+        shift 1
+        ;;
+    --)
+        die "No positional arguments are accepted.\n"
+        ;;
+    esac
+done
+raw="${raw:-0}"
+trap 'cleanup' ERR EXIT
+first_entries=$(append_mktemp)
+last_entries=$(append_mktemp)
+uptimes=$(append_mktemp)
+
+journalctl --list-boots --output=json | jq --raw-output '.[].first_entry' > "$first_entries"
+journalctl --list-boots --output=json | jq --raw-output '.[].last_entry' > "$last_entries"
+# systemd prints times in microseconds.
+paste "$first_entries" "$last_entries" | awk '{$1 = ($2 - $1) / 1000000} {print int($1)}' > "$uptimes"
+
+if [[ $raw == 1 ]]
+then
+    cat "$uptimes"
+    exit
+fi
+
+cat << EOF
+Uptime statistics from $(wc -l < "$uptimes") boots
+
+Minimum: $(displaytime "$(minimum "$uptimes")")
+Average: $(displaytime "$(average "$uptimes")")
+Maximum: $(displaytime "$(maximum "$uptimes")")
+
+Q1     : $(displaytime "$(q1 "$uptimes")")
+Median : $(displaytime "$(median "$uptimes")")
+Q3     : $(displaytime "$(q3 "$uptimes")")
+EOF
