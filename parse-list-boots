@@ -161,6 +161,12 @@ journalctl --list-boots --output=json | jq --raw-output '.[].last_entry' > "$las
 # systemd prints times in microseconds.
 paste "$first_entries" "$last_entries" | awk '{$1 = ($2 - $1) / 1000000} {print int($1)}' > "$uptimes"
 
+first_entry="$(head -n1 "$first_entries")"
+last_entry="$(tail -n1 "$last_entries")"
+lifetime=$(( (last_entry - first_entry) / 1000000 ))
+total_uptime="$(sumlist < "$uptimes")"
+uptime_percent=$( echo "scale=7; 100 * ($total_uptime / $lifetime)" | bc )
+
 if [[ $raw == 1 ]]
 then
     cat "$uptimes"
@@ -177,4 +183,8 @@ Maximum: $(displaytime "$(maximum "$uptimes")")
 Q1     : $(displaytime "$(q1 "$uptimes")")
 Median : $(displaytime "$(median "$uptimes")")
 Q3     : $(displaytime "$(q3 "$uptimes")")
+
+Lifetime: $(displaytime $lifetime)
+Total uptime: $( displaytime "$total_uptime" )
+Uptime %: $uptime_percent
 EOF
